@@ -101,7 +101,7 @@ router.get('/export', auth, adminOnly, async (req, res) => {
       'Department':    t.department    || '',
       'Receiver':      t.receiverName  || '',
       'Recorded By':   t.recordedByName || '',
-      'Time':          new Date(t.timestamp).toLocaleTimeString('en-IN'),
+      'Time':          new Date(t.timestamp).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
     }));
 
     const skuMap = {};
