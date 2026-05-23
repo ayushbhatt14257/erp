@@ -1,5 +1,9 @@
-const express = require('express');
-const router  = express.Router();
+// GET /api/dashboard/stock-filter?minQty=800
+// Returns all SKUs whose current balance >= minQty, sorted by balance descending
+// Add this route inside the existing dashboard router
+
+const express     = require('express');
+const router      = express.Router();
 const Transaction = require('../models/Transaction');
 const { auth }    = require('../middleware/auth');
 
@@ -19,7 +23,7 @@ router.get('/summary', auth, async (req, res) => {
       Transaction.aggregate([
         { $match: matchStage },
         { $group: {
-            _id: '$sku',
+            _id:          '$sku',
             skuName:      { $first: '$skuName' },
             totalIn:      { $sum: { $cond: [{ $eq: ['$type','IN']  }, '$quantity', 0] } },
             totalOut:     { $sum: { $cond: [{ $eq: ['$type','OUT'] }, '$quantity', 0] } },
@@ -76,7 +80,7 @@ router.get('/today', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// GET /api/dashboard/monthly?year=&month=
+// GET /api/dashboard/monthly
 router.get('/monthly', auth, async (req, res) => {
   try {
     const year   = parseInt(req.query.year)  || new Date().getFullYear();
@@ -98,6 +102,62 @@ router.get('/monthly', auth, async (req, res) => {
     });
 
     res.json(Object.values(map).sort((a, b) => a.date.localeCompare(b.date)));
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── GET /api/dashboard/stock-filter?minQty=800 ───────────────────────────────
+// Returns all models whose current balance >= minQty
+// Sorted by balance descending so highest stock appears first
+router.get('/stock-filter', auth, async (req, res) => {
+  try {
+    const minQty = parseInt(req.query.minQty);
+    if (isNaN(minQty) || minQty < 0)
+      return res.status(400).json({ message: 'minQty must be a non-negative number' });
+
+    const results = await Transaction.aggregate([
+      // Step 1: group by SKU to compute balance
+      {
+        $group: {
+          _id:      '$sku',
+          skuName:  { $first: '$skuName' },
+          totalIn:  { $sum: { $cond: [{ $eq: ['$type', 'IN']  }, '$quantity', 0] } },
+          totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$quantity', 0] } },
+          lastRow:  { $last: '$location.row'   },
+          lastShelf:{ $last: '$location.shelf' },
+        },
+      },
+      // Step 2: compute balance field
+      {
+        $addFields: { balance: { $subtract: ['$totalIn', '$totalOut'] } },
+      },
+      // Step 3: filter — only models with balance >= minQty
+      {
+        $match: { balance: { $gte: minQty } },
+      },
+      // Step 4: sort by balance descending (highest stock first)
+      {
+        $sort: { balance: -1 },
+      },
+      // Step 5: return only needed fields
+      {
+        $project: {
+          _id:      0,
+          skuName:  1,
+          balance:  1,
+          totalIn:  1,
+          totalOut: 1,
+          lastRow:  1,
+          lastShelf:1,
+        },
+      },
+    ]);
+
+    res.json({
+      minQty,
+      count:   results.length,
+      results,
+      generatedAt: new Date().toISOString(),
+    });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 

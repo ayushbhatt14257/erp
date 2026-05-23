@@ -11,70 +11,70 @@ function StockFilter() {
   const [results,   setResults]   = useState(null);
   const [loading,   setLoading]   = useState(false);
   const [dlLoading, setDlLoading] = useState(false);
-  const [searched,  setSearched]  = useState(false);
+  const [error,     setError]     = useState(null);
 
   const handleFilter = async () => {
     const qty = parseInt(minQty);
-    if (isNaN(qty) || qty < 0) return toast.error('Enter a valid quantity');
+    if (isNaN(qty) || qty < 0) return toast.error('Enter a valid quantity (0 or more)');
+
     setLoading(true);
     setResults(null);
+    setError(null);
+
     try {
       const { data } = await api.get(`/dashboard/stock-filter?minQty=${qty}`);
       setResults(data);
-      setSearched(true);
       if (data.count === 0) toast('No models found with stock ≥ ' + qty, { icon: '📦' });
+      else toast.success(`Found ${data.count} models`);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Error fetching stock');
-    } finally { setLoading(false); }
+      // Catch ALL errors — prevents blank screen crash
+      const msg = err.response?.data?.message || err.message || 'Failed to fetch stock data';
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDownload = () => {
     if (!results?.results?.length) return;
     setDlLoading(true);
     try {
-      // Format date-time in IST for filename and sheet
-      const now    = new Date();
+      const now      = new Date();
+      const fileDate = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const fileTime = now.toLocaleTimeString('en-IN', {
+        timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).replace(':', '-');
+
       const istStr = now.toLocaleString('en-IN', {
-        timeZone:   'Asia/Kolkata',
-        day:        '2-digit',
-        month:      '2-digit',
-        year:       'numeric',
-        hour:       '2-digit',
-        minute:     '2-digit',
-        hour12:     true,
+        timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
       });
-      const fileDate = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
-      const fileTime = now.toLocaleTimeString('en-IN', { timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hour12:false }).replace(':','-');
 
-      // Build Excel rows
-      const rows = results.results.map((r, i) => ({
-        '#':            i + 1,
-        'Model Name':   r.skuName,
-        'Stock (pcs)':  r.balance,
-        'Location':     r.lastRow ? `${r.lastRow}${r.lastShelf ? ' / Shelf ' + r.lastShelf : ''}` : '—',
-      }));
-
-      // Info row at top
       const infoRows = [
-        { '#': 'Report', 'Model Name': `Stock ≥ ${results.minQty} pcs`, 'Stock (pcs)': '', 'Location': '' },
-        { '#': 'Date',   'Model Name': istStr,                           'Stock (pcs)': '', 'Location': '' },
-        { '#': 'Total',  'Model Name': `${results.count} models`,        'Stock (pcs)': '', 'Location': '' },
-        { '#': '',       'Model Name': '',                                'Stock (pcs)': '', 'Location': '' },
-        ...rows,
+        { '#': 'Report', 'Model Name': `Stock >= ${results.minQty} pcs`, 'Stock (pcs)': '', 'Location': '' },
+        { '#': 'Date',   'Model Name': istStr,                            'Stock (pcs)': '', 'Location': '' },
+        { '#': 'Total',  'Model Name': `${results.count} models`,         'Stock (pcs)': '', 'Location': '' },
+        { '#': '',       'Model Name': '',                                 'Stock (pcs)': '', 'Location': '' },
+        ...results.results.map((r, i) => ({
+          '#':           i + 1,
+          'Model Name':  r.skuName,
+          'Stock (pcs)': r.balance,
+          'Location':    r.lastRow ? `${r.lastRow}${r.lastShelf ? ' / Shelf ' + r.lastShelf : ''}` : '—',
+        })),
       ];
 
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.json_to_sheet(infoRows);
-
-      // Column widths
-      ws['!cols'] = [{ wch: 6 }, { wch: 30 }, { wch: 14 }, { wch: 20 }];
-
+      ws['!cols'] = [{ wch: 6 }, { wch: 32 }, { wch: 14 }, { wch: 20 }];
       XLSX.utils.book_append_sheet(wb, ws, 'Stock Filter');
       XLSX.writeFile(wb, `StockFilter_min${results.minQty}_${fileDate}_${fileTime}.xlsx`);
       toast.success('Excel downloaded');
-    } catch {
-      toast.error('Download failed');
-    } finally { setDlLoading(false); }
+    } catch (err) {
+      toast.error('Download failed: ' + err.message);
+    } finally {
+      setDlLoading(false);
+    }
   };
 
   return (
@@ -85,7 +85,6 @@ function StockFilter() {
         <div style={{ fontSize: 13, color: 'var(--gray-400)', marginBottom: 14 }}>
           Enter a quantity — all models with stock greater than or equal to that number will be shown.
         </div>
-
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
           <div style={{ flex: 1 }}>
             <label className="form-label">Minimum quantity (pcs)</label>
@@ -96,7 +95,7 @@ function StockFilter() {
               min="0"
               value={minQty}
               onChange={e => setMinQty(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleFilter()}
+              onKeyDown={e => e.key === 'Enter' && minQty !== '' && handleFilter()}
               placeholder="e.g. 800"
             />
           </div>
@@ -111,22 +110,25 @@ function StockFilter() {
         </div>
       </div>
 
+      {/* Error state — shown instead of blank screen */}
+      {error && !loading && (
+        <div className="alert alert-danger">
+          <strong>Error:</strong> {error}
+        </div>
+      )}
+
       {/* Results */}
-      {results && (
+      {results && !error && (
         <div className="card">
-          {/* Header row */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 600 }}>
                 Models with stock ≥ {results.minQty.toLocaleString()} pcs
               </div>
               <div style={{ fontSize: 13, color: 'var(--gray-400)', marginTop: 2 }}>
-                {results.count} model{results.count !== 1 ? 's' : ''} found
-                {' · '}sorted by highest stock first
+                {results.count} model{results.count !== 1 ? 's' : ''} found · sorted highest first
               </div>
             </div>
-
-            {/* Download button */}
             <button
               className="btn btn-success btn-sm"
               onClick={handleDownload}
@@ -156,9 +158,7 @@ function StockFilter() {
                         {r.balance.toLocaleString()}
                       </td>
                       <td style={{ fontSize: 13, color: 'var(--gray-400)' }}>
-                        {r.lastRow
-                          ? `${r.lastRow}${r.lastShelf ? ' · Shelf ' + r.lastShelf : ''}`
-                          : '—'}
+                        {r.lastRow ? `${r.lastRow}${r.lastShelf ? ' · Shelf ' + r.lastShelf : ''}` : '—'}
                       </td>
                     </tr>
                   ))}
@@ -172,21 +172,18 @@ function StockFilter() {
             </div>
           )}
 
-          {/* Footer */}
           {results.results.length > 0 && (
             <div style={{ fontSize: 12, color: 'var(--gray-400)', marginTop: 12, textAlign: 'right' }}>
-              Generated at{' '}
-              {new Date(results.generatedAt).toLocaleTimeString('en-IN', {
-                timeZone: 'Asia/Kolkata',
-                hour: '2-digit', minute: '2-digit', hour12: true,
+              Generated at {new Date(results.generatedAt).toLocaleTimeString('en-IN', {
+                timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true,
               })}
             </div>
           )}
         </div>
       )}
 
-      {/* Empty state before first search */}
-      {!loading && !results && (
+      {/* Empty state */}
+      {!loading && !results && !error && (
         <div className="text-center text-muted" style={{ padding: 48 }}>
           <div style={{ fontSize: 36, marginBottom: 10 }}>📊</div>
           <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6 }}>Enter a minimum quantity above</div>
@@ -197,10 +194,9 @@ function StockFilter() {
   );
 }
 
-// ── Search Model tab (existing) ───────────────────────────────────────────────
+// ── Search Model tab ──────────────────────────────────────────────────────────
 function SearchModel() {
   const { user } = useAuth();
-
   const [sku,         setSku]         = useState(null);
   const [result,      setResult]      = useState(null);
   const [loading,     setLoading]     = useState(false);
@@ -241,7 +237,7 @@ function SearchModel() {
   const cancelEdit = () => { setEditing(false); setEditRow(''); setEditShelf(''); setEditMachine(''); };
 
   const saveLocation = async () => {
-    if (!result?.latestIn?._id) return toast.error('No Stock In transaction found for this model');
+    if (!result?.latestIn?._id) return toast.error('No Stock In transaction found');
     if (!editRow) return toast.error('Row is required');
     setSaving(true);
     try {
@@ -261,9 +257,9 @@ function SearchModel() {
   const canEdit = user && ['admin', 'worker'].includes(user.role);
 
   const info = (balance) => {
-    if (balance === 0) return { label:'Out of stock', cls:'badge-short',  color:'var(--danger)'  };
-    if (balance < 500) return { label:'Low stock',    cls:'badge-partial', color:'var(--warning)' };
-    return               { label:'In stock',      cls:'badge-ready',   color:'var(--success)' };
+    if (balance === 0) return { label: 'Out of stock', cls: 'badge-short',  color: 'var(--danger)'  };
+    if (balance < 500) return { label: 'Low stock',    cls: 'badge-partial', color: 'var(--warning)' };
+    return               { label: 'In stock',      cls: 'badge-ready',   color: 'var(--success)' };
   };
 
   return (
@@ -305,7 +301,6 @@ function SearchModel() {
               </div>
             </div>
 
-            {/* Location + edit */}
             {!editing && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: result.lastLocation?.row ? 'var(--primary-light)' : 'var(--gray-50)', borderRadius: 8, marginBottom: 12 }}>
                 <span style={{ fontSize: 22, flexShrink: 0 }}>📍</span>
@@ -386,9 +381,9 @@ function SearchModel() {
   );
 }
 
-// ── Main QuickSearch page with two tabs ───────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function QuickSearch() {
-  const [tab, setTab] = useState('search'); // 'search' | 'filter'
+  const [tab, setTab] = useState('search');
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto' }}>
@@ -397,32 +392,19 @@ export default function QuickSearch() {
         <div className="page-sub">Search individual models or filter by stock level</div>
       </div>
 
-      {/* Tab switcher */}
+      {/* Tabs */}
       <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid var(--border)' }}>
-        <button
-          onClick={() => setTab('search')}
-          style={{
+        {[['search', '🔍 Search Model'], ['filter', '📊 Stock Filter']].map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)} style={{
             padding: '10px 20px', fontSize: 14, fontWeight: 500, cursor: 'pointer',
             background: 'none', border: 'none', fontFamily: 'inherit',
-            color:       tab === 'search' ? 'var(--primary)' : 'var(--gray-600)',
-            borderBottom: tab === 'search' ? '2px solid var(--primary)' : '2px solid transparent',
+            color:        tab === key ? 'var(--primary)' : 'var(--gray-600)',
+            borderBottom: tab === key ? '2px solid var(--primary)' : '2px solid transparent',
             marginBottom: -1,
-          }}
-        >
-          🔍 Search Model
-        </button>
-        <button
-          onClick={() => setTab('filter')}
-          style={{
-            padding: '10px 20px', fontSize: 14, fontWeight: 500, cursor: 'pointer',
-            background: 'none', border: 'none', fontFamily: 'inherit',
-            color:       tab === 'filter' ? 'var(--primary)' : 'var(--gray-600)',
-            borderBottom: tab === 'filter' ? '2px solid var(--primary)' : '2px solid transparent',
-            marginBottom: -1,
-          }}
-        >
-          📊 Stock Filter
-        </button>
+          }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {tab === 'search' && <SearchModel />}
